@@ -30,7 +30,6 @@ def process_lc_and_gti(lc_path):
         print(f"Error processing {lc_path}: {e}")
         return None
 
-# Collect all DataFrames
 all_dfs = []
 for root, _, files in os.walk(base_path):
     if "SDD2" in root:
@@ -41,7 +40,6 @@ for root, _, files in os.walk(base_path):
                 if df is not None:
                     all_dfs.append(df)
 
-# Concatenate all daily light curves
 if all_dfs:
     final_df = pd.concat(all_dfs).sort_values(by="DATETIME").reset_index(drop=True)
 
@@ -65,7 +63,6 @@ if all_dfs:
         .astype(int)
     )
 
-    # Save final version
     output_file = os.path.join(base_path, "processed_solexs_tft_ready.csv")
     resampled.to_csv(output_file, index=False)
     print(f"Final dataset with labels saved to: {output_file}")
