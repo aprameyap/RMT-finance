@@ -1,108 +1,75 @@
-import pandas as pd
 import torch
-from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer, Baseline, NBeats
-from pytorch_forecasting.data import NaNLabelEncoder
-from pytorch_forecasting.metrics import CrossEntropy
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_lightning.loggers import CSVLogger
-from torch.utils.data import DataLoader
+import yaml
+import torch.nn as nn
+from torch.optim import Adam
+from fedformer.model import Model
+from scripts.data_utils import load_data
+from scripts.eval_utils import evaluate_metrics
 
-# Load the dataset
-df = pd.read_csv("data/processed_solexs_tft_ready.csv", parse_dates=["DATETIME"])
-df["time_idx"] = range(len(df))
-df["group_id"] = "solarflare"
+with open('configs/config.yaml', 'r') as f:
+    cfg = yaml.safe_load(f)
 
-# Define parameters
-encoder_length = 288   # Past 24h (5-min resolution)
-decoder_length = 288   # Predict next 24h
+device = torch.device('cuda' if cfg['use_gpu'] and torch.cuda.is_available() else 'cpu')
 
-# Define TFT-ready dataset
-tft_dataset = TimeSeriesDataSet(
-    df,
-    time_idx="time_idx",
-    target="FLARE_TARGET_24h",
-    group_ids=["group_id"],
-    max_encoder_length=encoder_length,
-    max_prediction_length=decoder_length,
-    time_varying_known_reals=["time_idx"],
-    time_varying_unknown_reals=["FLUX_SMOOTH"],
-    static_categoricals=["group_id"],
-    target_normalizer=NaNLabelEncoder().fit(df["FLARE_TARGET_24h"]),
-    allow_missing_timesteps=True,
+train_loader, test_loader = load_data(
+    'data/processed_solexs.csv',
+    seq_len=cfg['seq_len'],
+    label_len=cfg['label_len'],
+    pred_len=cfg['pred_len']
 )
 
-# Train/val split
-split_idx = int(0.8 * len(df))
-df_train = df.iloc[:split_idx]
-df_val = df.iloc[split_idx:]
+# Wrap config dictionary as class (for compatibility with model init)
+class ConfigWrapper:
+    def __init__(self, d):
+        self.__dict__.update(d)
 
-# Create two separate datasets
-train_dataset = TimeSeriesDataSet(
-    df_train,
-    time_idx="time_idx",
-    target="FLARE_TARGET_24h",
-    group_ids=["group_id"],
-    max_encoder_length=encoder_length,
-    max_prediction_length=decoder_length,
-    time_varying_known_reals=["time_idx"],
-    time_varying_unknown_reals=["FLUX_SMOOTH"],
-    static_categoricals=["group_id"],
-    target_normalizer=NaNLabelEncoder().fit(df["FLARE_TARGET_24h"]),
-    allow_missing_timesteps=True,
-)
+model_cfg = {
+    **cfg,
+    "version": "Fourier",           # or 'Wavelets'
+    "mode_select": "random",
+    "modes": 32,
+    "moving_avg": 25,
+    "L": 1,
+    "base": "legendre",
+    "cross_activation": "tanh",
+    "freq": "h",                    # doesn't matter for dummy marks
+    "embed": "timeF",
+    "output_attention": False,
+    "n_heads": 8,
+    "activation": "gelu",
+    "wavelet": 0,
+    "d_ff": 256
+}
 
-val_dataset = TimeSeriesDataSet.from_dataset(train_dataset, df_val, stop_randomization=True)
+model = Model(ConfigWrapper(model_cfg)).to(device)
 
+criterion = nn.BCEWithLogitsLoss()
+optimizer = Adam(model.parameters(), lr=cfg['learning_rate'])
 
-# Dataloaders
-train_dataloader = train_dataset.to_dataloader(train=True, batch_size=64, num_workers=4)
-val_dataloader = val_dataset.to_dataloader(train=False, batch_size=64, num_workers=4)
+for epoch in range(cfg['epochs']):
+    model.train()
+    total_loss = 0
 
-# Callbacks
-early_stop = EarlyStopping(monitor="val_loss", patience=5, min_delta=1e-4)
-checkpoint = ModelCheckpoint(dirpath="outputs/checkpoints", save_top_k=1, monitor="val_loss")
-logger = CSVLogger("outputs", name="tft_solarflare")
+    for seq_x, seq_y, target in train_loader:
+        seq_x = seq_x.to(device)
+        seq_y = seq_y.to(device)
+        target = target.to(device)
 
-# Define model
-tft = TemporalFusionTransformer.from_dataset(
-    train_dataset,
-    learning_rate=1e-3,
-    hidden_size=16,
-    attention_head_size=1,
-    dropout=0.1,
-    output_size=1,
-    loss=CrossEntropy(),
-    log_interval=10,
-    reduce_on_plateau_patience=4,
-)
+        # Dummy time encodings (same shape as x, but 4 features)
+        B, L, _ = seq_x.shape
+        mark_enc = torch.zeros((B, L, 4)).to(device)
+        mark_dec = torch.zeros((B, seq_y.shape[1], 4)).to(device)
 
-# Train
-trainer = Trainer(
-    max_epochs=30,
-    accelerator="auto",
-    callbacks=[early_stop, checkpoint],
-    logger=logger,
-    gradient_clip_val=0.1,
-)
+        optimizer.zero_grad()
+        out = model(seq_x, mark_enc, seq_y, mark_dec)
+        out = out[:, -1, 0]  # get final prediction step
+        loss = criterion(out, target)
+        loss.backward()
+        optimizer.step()
 
-if __name__ == "__main__":
-    import multiprocessing
-    multiprocessing.set_start_method("spawn", force=True)
+        total_loss += loss.item()
 
-    # Now run training
-    trainer.fit(tft, train_dataloader, val_dataloader)
+    print(f"Epoch {epoch}: Train Loss: {total_loss / len(train_loader):.4f}")
 
-# Save predictions
-best_model_path = checkpoint.best_model_path
-best_model = TemporalFusionTransformer.load_from_checkpoint(best_model_path)
-predictions = best_model.predict(val_dataloader, return_y=True, trainer=trainer)
-
-pred_df = pd.DataFrame({
-    "y_pred": predictions.output.flatten(),
-    "y_true": predictions.y.flatten()
-})
-pred_df.to_csv("outputs/tft_predictions.csv", index=False)
-print(f"Saved predictions and best model to: {best_model_path}")
-
-
+    if (epoch + 1) % 5 == 0:
+        evaluate_metrics(model, test_loader, device)

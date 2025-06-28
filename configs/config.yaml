@@ -1,0 +1,15 @@
+seq_len: 288         # 1 day input
+label_len: 144       # decoder context
+pred_len: 288        # 24h prediction
+batch_size: 32
+learning_rate: 0.0001
+epochs: 30
+enc_in: 1
+dec_in: 1
+c_out: 1
+e_layers: 2
+d_layers: 1
+d_model: 512
+dropout: 0.1
+factor: 3
+use_gpu: false
