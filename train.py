@@ -71,14 +71,12 @@ def main():
         if isinstance(train_loader.sampler, DistributedSampler):
             train_loader.sampler.set_epoch(epoch)
 
-        for seq_x, seq_y, target in train_loader:
+        for seq_x, seq_y, mark_enc, mark_dec, target in train_loader:
             seq_x = seq_x.to(device)
             seq_y = seq_y.to(device)
+            mark_enc = mark_enc.to(device)
+            mark_dec = mark_dec.to(device)
             target = target.to(device)
-
-            B, L, _ = seq_x.shape
-            mark_enc = torch.zeros((B, L, 4), device=device)
-            mark_dec = torch.zeros((B, seq_y.shape[1], 4), device=device)
 
             optimizer.zero_grad()
             out = model(seq_x, mark_enc, seq_y, mark_dec)
