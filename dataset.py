@@ -23,7 +23,7 @@ class SolarFlareDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
 
-df = pd.read_csv("data/processed_solexs_tft_ready.csv", parse_dates=["DATETIME"])
+df = pd.read_csv("data/processed_solexs.csv", parse_dates=["DATETIME"])
 split_idx = int(0.8 * len(df))
 
 train_dataset = SolarFlareDataset(df.iloc[:split_idx])

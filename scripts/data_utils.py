@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from sklearn.preprocessing import StandardScaler
 import torch
 
@@ -35,7 +36,7 @@ class SolarDataset(Dataset):
             torch.tensor(target, dtype=torch.float)
         )
 
-def load_data(file_path, seq_len, label_len, pred_len):
+def load_data(file_path, seq_len, label_len, pred_len, distributed=False):
     df = pd.read_csv(file_path, parse_dates=['DATETIME'])
     train_df = df[df['DATETIME'] < '2025-03-01']
     test_df = df[df['DATETIME'] >= '2025-03-01']
@@ -43,7 +44,9 @@ def load_data(file_path, seq_len, label_len, pred_len):
     train_set = SolarDataset(train_df, seq_len, label_len, pred_len)
     test_set = SolarDataset(test_df, seq_len, label_len, pred_len)
 
-    return (
-        DataLoader(train_set, batch_size=32, shuffle=True),
-        DataLoader(test_set, batch_size=32, shuffle=False)
-    )
+    train_sampler = DistributedSampler(train_set) if distributed else None
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=(train_sampler is None), sampler=train_sampler)
+    test_loader = DataLoader(test_set, batch_size=32, shuffle=False)
+
+    return train_loader, test_loader
+
