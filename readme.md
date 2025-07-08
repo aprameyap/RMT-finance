@@ -1,1 +1,1 @@
-Code for blog: 
+Code for blog: https://medium.com/@aprameyap/my-experiments-with-random-matrix-theory-f226f821afef
