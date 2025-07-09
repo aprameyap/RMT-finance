@@ -20,13 +20,10 @@ data.dropna(axis=0, how='any', inplace=True)  # Remove rows with missing prices
 
 returns = np.log(data / data.shift(1)).dropna()
 
-window_size = 250
+window_size = 60
 step_size = 5      
 max_eigs = []       
 dates = []
-
-window_size = 250 
-step_size = 5 
 top_k = 3       
 
 
